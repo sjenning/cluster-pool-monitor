@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+  labels:
+    app: cluster-pool-monitor
+  name: cluster-pool-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cluster-pool-monitor
+  template:
+    metadata:
+      labels:
+        app: cluster-pool-monitor
+    spec:
+      containers:
+      - command:
+        - /usr/local/bin/cluster-pool-monitor
+        env:
+        - name: KUBECONFIG
+          value: /etc/kubernetes/kubeconfig
+        image: quay.io/sjenning/cluster-pool-monitor:latest
+        imagePullPolicy: Always
+        name: cluster-pool-monitor
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /etc/kubernetes
+          name: kubeconfig
+          readOnly: true
+      volumes:
+      - name: kubeconfig
+        secret:
+          secretName: cluster-pool-kubeconfig
