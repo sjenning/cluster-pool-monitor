@@ -11,6 +11,7 @@
 </head>
 <body>
 <div class="container-fluid">
+	<p>Last updated {{ .UpdateTime }}</p>
 	{{ range .Pools }}
 	<h3>{{ .Name }} Cluster Pool</h3>
 	<table class="table">

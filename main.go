@@ -7,6 +7,7 @@ import (
 	"log"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"context"
 	"fmt"
@@ -72,7 +73,8 @@ type ClusterPool struct {
 }
 
 type StatusPage struct {
-	Pools []ClusterPool
+	Pools      []ClusterPool
+	UpdateTime string
 }
 
 func main() {
@@ -91,16 +93,40 @@ func main() {
 		os.Exit(1)
 	}
 
-	// gather data
-	clusterPoolList := &hivev1.ClusterPoolList{}
-	err = client.List(ctx, clusterPoolList, crclient.InNamespace("hypershift-cluster-pool"))
+	err = gatherData(ctx, client)
 	if err != nil {
-		log.Fatalf("unable to list cluster pools: %v", err)
+		log.Printf("error updating data: %v", err)
+	} else {
+		log.Print("data updated")
+	}
+
+	for {
+		select {
+		case <-time.After(time.Minute):
+			err := gatherData(ctx, client)
+			if err != nil {
+				log.Printf("error updating data: %v", err)
+			} else {
+				log.Print("data updated")
+			}
+		case <-ctx.Done():
+			os.Exit(0)
+		}
+	}
+}
+
+func gatherData(ctx context.Context, client crclient.Client) error {
+	log.Print("updating data")
+
+	clusterPoolList := &hivev1.ClusterPoolList{}
+	err := client.List(ctx, clusterPoolList, crclient.InNamespace("hypershift-cluster-pool"))
+	if err != nil {
+		return fmt.Errorf("unable to list cluster pools: %v", err)
 	}
 	clusterClaimList := &hivev1.ClusterClaimList{}
 	err = client.List(ctx, clusterClaimList, crclient.InNamespace("hypershift-cluster-pool"))
 	if err != nil {
-		log.Fatalf("unable to list cluster claims: %v", err)
+		return fmt.Errorf("unable to list cluster claims: %v", err)
 	}
 	var clusterPools []ClusterPool
 	for _, clusterpool := range clusterPoolList.Items {
@@ -108,7 +134,7 @@ func main() {
 		namespaceList := &corev1.NamespaceList{}
 		err = client.List(ctx, namespaceList)
 		if err != nil {
-			log.Fatalf("unable to list namespaces: %v", err)
+			return fmt.Errorf("unable to list namespaces: %v", err)
 		}
 		for _, ns := range namespaceList.Items {
 			if !strings.HasPrefix(ns.Name, clusterpool.Name) {
@@ -117,7 +143,7 @@ func main() {
 			clusterDeploymentList := &hivev1.ClusterDeploymentList{}
 			err = client.List(ctx, clusterDeploymentList, crclient.InNamespace(ns.Name))
 			if err != nil {
-				log.Fatalf("unable to list cluster deployments: %v", err)
+				return fmt.Errorf("unable to list cluster deployments: %v", err)
 			}
 			clusterDeployment := clusterDeploymentList.Items[0]
 			var status string
@@ -141,19 +167,22 @@ func main() {
 				PowerState: clusterDeployment.Status.PowerState,
 				ProwJob:    prowJobID,
 			}
+			if clusterDeployment.Spec.ClusterMetadata != nil {
+				deployment.InfraID = clusterDeployment.Spec.ClusterMetadata.InfraID
+			}
 			if prowJobID != "" {
 				var prowJob prowv1.ProwJob
 				resp, err := http.Get(fmt.Sprintf("https://prow.ci.openshift.org/prowjob?prowjob=%s", prowJobID))
 				if err != nil {
-					log.Fatalf("unable to get prow job: %v", err)
+					return fmt.Errorf("unable to get prow job: %v", err)
 				}
 				bytes, err := io.ReadAll(resp.Body)
 				if err != nil {
-					log.Fatalf("unable to read prow job: %v", err)
+					return fmt.Errorf("unable to read prow job: %v", err)
 				}
 				YamlSerializer.Decode(bytes, nil, &prowJob)
 				deployment.ProwJobName = prowJob.Spec.Job
-				if len(prowJob.Spec.Refs.Pulls) > 0 {
+				if prowJob.Spec.Refs != nil && len(prowJob.Spec.Refs.Pulls) > 0 {
 					deployment.ProwPullAuthor = prowJob.Spec.Refs.Pulls[0].Author
 					deployment.ProwPullNumber = prowJob.Spec.Refs.Pulls[0].Number
 					deployment.ProwPullLink = prowJob.Spec.Refs.Pulls[0].Link
@@ -175,14 +204,15 @@ func main() {
 	}
 
 	statusPage := StatusPage{
-		Pools: clusterPools,
+		Pools:      clusterPools,
+		UpdateTime: time.Now().Format(time.RFC822Z),
 	}
 
 	var output bytes.Buffer
 	page := template.Must(template.New("page").Parse(htmlPage))
 	err = page.Execute(&output, statusPage)
 	if err != nil {
-		log.Fatalf("unable to execute template: %v", err)
+		return fmt.Errorf("unable to execute template: %v", err)
 	}
 
 	awsConfig := aws.NewConfig()
@@ -198,6 +228,7 @@ func main() {
 		CacheControl: aws.String("max-age=50"),
 	})
 	if err != nil {
-		log.Fatalf("unable to upload to s3: %v", err)
+		return fmt.Errorf("unable to upload to s3: %v", err)
 	}
+	return nil
 }

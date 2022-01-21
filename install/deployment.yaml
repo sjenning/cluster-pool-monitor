@@ -1,7 +1,6 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  annotations:
   labels:
     app: cluster-pool-monitor
   name: cluster-pool-monitor
@@ -21,18 +20,21 @@ spec:
         env:
         - name: KUBECONFIG
           value: /etc/kubernetes/kubeconfig
+        - name: AWS_SHARED_CREDENTIALS_FILE
+          value: /etc/aws/credentials
         image: quay.io/sjenning/cluster-pool-monitor:latest
         imagePullPolicy: Always
         name: cluster-pool-monitor
-        ports:
-        - containerPort: 8080
-          name: http
-          protocol: TCP
         volumeMounts:
         - mountPath: /etc/kubernetes
-          name: kubeconfig
+          name: cluster-pool-kubeconfig
+        - mountPath: /etc/aws
+          name: s3-aws-creds
           readOnly: true
       volumes:
-      - name: kubeconfig
+      - name: cluster-pool-kubeconfig
         secret:
           secretName: cluster-pool-kubeconfig
+      - name: s3-aws-creds
+        secret:
+          secretName: s3-aws-creds
