@@ -69,11 +69,9 @@ type ClusterClaim struct {
 }
 
 type ClusterDeployment struct {
-	InfraID             string
-	PowerState          string
-	ReadyReason         string
-	ReadyReasonDuration string
-	Claim               *ClusterClaim
+	InfraID    string
+	PowerState string
+	Claim      *ClusterClaim
 }
 
 type ClusterPool struct {
@@ -237,16 +235,6 @@ func gatherData(ctx context.Context, client crclient.Client) ([]byte, error) {
 
 			deployment := &ClusterDeployment{
 				PowerState: string(clusterDeployment.Status.PowerState),
-			}
-			for _, condition := range clusterDeployment.Status.Conditions {
-				if condition.Type == hivev1.ClusterReadyCondition {
-					deployment.ReadyReason = condition.Reason
-					minutes := int(time.Since(condition.LastTransitionTime.Time).Minutes())
-					hours := minutes / 60
-					minutes = minutes % 60
-					deployment.ReadyReasonDuration = fmt.Sprintf("%dh%dm", hours, minutes)
-					break
-				}
 			}
 			if clusterDeployment.Spec.ClusterMetadata != nil {
 				deployment.InfraID = clusterDeployment.Spec.ClusterMetadata.InfraID

@@ -35,7 +35,6 @@
 			<tr>
 				<th scope="col">InfraID</th>
 				<th scope="col">PowerState</th>
-				<th scope="col">ReadyReason</th>
 				<th scope="col">Prow</th>
 			</tr>
 		</thead>
@@ -44,17 +43,16 @@
 			<tr>
 				<td scope="row"><a href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Instances:v=3;search=:{{ .InfraID }}">{{ .InfraID }}</a></td>
 				<td>{{ .PowerState }}</td>
-				<td>{{ .ReadyReason }} ({{ .ReadyReasonDuration }})</td>
 				{{ if .Claim }}
 				<td><a href="{{ .Claim.Job.URL }}">{{ .Claim.Job.Name }}</a>{{ if .Claim.Job.PullRef}} - {{ .Claim.Job.PullRef.Author }} (<a title="{{ .Claim.Job.PullRef.Title }}" href="{{ .Claim.Job.PullRef.Link }}">{{ .Claim.Job.PullRef.Number }}</a>){{ end }}{{ if .Claim.Job.State }} - {{ .Claim.Job.State }}{{ end }}</td>
 				{{ else }}
-				<td>Unclaimed</td>
+				<td></td>
 				{{ end }}
 			</tr>
 			{{ end }}
 		</tbody>
 	</table>
-	<div class=container>
+	<div class="container-fluid">
 		<p>Pending Cluster Claims</p>
 		<ul>
 		{{ range .PendingClaims }}
