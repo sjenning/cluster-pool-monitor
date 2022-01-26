@@ -1031,6 +1031,8 @@ github.com/openshift/api v0.0.0-20210216211028-bb81baaf35cd/go.mod h1:aqU5Cq+kqK
 github.com/openshift/build-machinery-go v0.0.0-20200917070002-f171684f77ab/go.mod h1:b1BuldmJlbA/xYtdZvKi+7j5YGB44qJUJDZ9zwiNCfE=
 github.com/openshift/hive/apis v0.0.0-20220114220626-588f139c6122 h1:s4tzgyrW1Adp/2OrIeIBva+jKvFOkjB5L9+8huyzWTg=
 github.com/openshift/hive/apis v0.0.0-20220114220626-588f139c6122/go.mod h1:77ODrnaHiDlfbqQgvk5nUWuqf2AsGY/99QlfNTiqHwI=
+github.com/openshift/hive/apis v0.0.0-20220124211047-fcac82e4f82f h1:wZ0MhJ5MiTZxXEDd0qHsuuqp66kX9FYX5mUP9ayZBmo=
+github.com/openshift/hive/apis v0.0.0-20220124211047-fcac82e4f82f/go.mod h1:77ODrnaHiDlfbqQgvk5nUWuqf2AsGY/99QlfNTiqHwI=
 github.com/opentracing/opentracing-go v1.1.0/go.mod h1:UkNAQd3GIcIGf0SeVgPpRdFStlNbqXla1AfSYxPUl2o=
 github.com/openzipkin/zipkin-go v0.1.1/go.mod h1:NtoC/o8u3JlF1lSlyPNswIbeQH9bJTmOf0Erfk+hxe8=
 github.com/openzipkin/zipkin-go v0.1.6/go.mod h1:QgAqvLzwWbR/WpD4A3cGpPtJrZXNIiJc5AZX7/PBEpw=

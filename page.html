@@ -10,7 +10,7 @@
 </style>
 </head>
 <body>
-<div class="container-fluid">
+<div class="container">
 	<p>Last updated {{ .UpdateTime }}</p>
 	{{ range .Pools }}
 	<h3>{{ .Name }} Cluster Pool</h3>
@@ -18,16 +18,14 @@
 		<thead class="thead-light">
 			<tr>
 				<th scope="col">Size</th>
-				<th scope="col">MaxSize</th>
-				<th scope="col">Unclaimed</th>
+				<th scope="col">Standby</th>
 				<th scope="col">Ready</th>
 			</tr>
 		</thead>
 		<tbody>
 			<tr>
 				<td>{{ .Size }}</td>
-				<td>{{ .MaxSize }}</td>
-				<td>{{ .Unclaimed }}</td>
+				<td>{{ .Standby }}</td>
 				<td>{{ .Ready }}</td>
 			</tr>
 		</tbody>
@@ -36,9 +34,8 @@
 		<thead class="thead-light">
 			<tr>
 				<th scope="col">InfraID</th>
-				<th scope="col">Status</th>
 				<th scope="col">PowerState</th>
-				<th scope="col">ProwState</th>
+				<th scope="col">ReadyReason</th>
 				<th scope="col">Prow</th>
 			</tr>
 		</thead>
@@ -46,11 +43,10 @@
 			{{ range .Deployments}}
 			<tr>
 				<td scope="row"><a href="https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Instances:v=3;search=:{{ .InfraID }}">{{ .InfraID }}</a></td>
-				<td>{{ .Status }}</td>
 				<td>{{ .PowerState }}</td>
-				<td>{{ .ProwState }}</td>
-				{{ if .ProwJob }}
-				<td><a href="{{ .ProwURL }}">{{ .ProwJobName }}</a>{{ if .ProwPullAuthor}} - {{ .ProwPullAuthor }} (<a title="{{ .ProwPullTitle }}" href="{{ .ProwPullLink }}">{{ .ProwPullNumber }}</a>){{ end }}</td>
+				<td>{{ .ReadyReason }} ({{ .ReadyReasonDuration }})</td>
+				{{ if .Claim }}
+				<td><a href="{{ .Claim.Job.URL }}">{{ .Claim.Job.Name }}</a>{{ if .Claim.Job.PullRef}} - {{ .Claim.Job.PullRef.Author }} (<a title="{{ .Claim.Job.PullRef.Title }}" href="{{ .Claim.Job.PullRef.Link }}">{{ .Claim.Job.PullRef.Number }}</a>){{ end }}{{ if .Claim.Job.State }} - {{ .Claim.Job.State }}{{ end }}</td>
 				{{ else }}
 				<td>Unclaimed</td>
 				{{ end }}
@@ -58,6 +54,14 @@
 			{{ end }}
 		</tbody>
 	</table>
+	<div class=container>
+		<p>Pending Cluster Claims</p>
+		<ul>
+		{{ range .PendingClaims }}
+			<li><a href="{{ .Job.URL }}">{{ .Job.Name }}</a>{{ if .Job.PullRef}} - {{ .Job.PullRef.Author }} (<a title="{{ .Job.PullRef.Title }}" href="{{ .Job.PullRef.Link }}">{{ .Job.PullRef.Number }}</a>){{ end }}{{ if .Job.State }} - {{ .Job.State }}{{ end }}</li>
+		{{ end }}
+		</ul>
+	</div>
 	{{ end }}
 </div>
 </body>

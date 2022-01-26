@@ -19,7 +19,7 @@ replace (
 
 require (
 	github.com/aws/aws-sdk-go v1.37.22
-	github.com/openshift/hive/apis v0.0.0-20220114220626-588f139c6122
+	github.com/openshift/hive/apis v0.0.0-20220124211047-fcac82e4f82f
 	k8s.io/api v0.22.2
 	k8s.io/apimachinery v0.22.2
 	k8s.io/test-infra v0.0.0-20220119215932-38c9bebe0351

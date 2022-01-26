@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"flag"
 	"html/template"
 	"log"
 	"os/signal"
@@ -48,36 +49,67 @@ func init() {
 //go:embed page.html
 var htmlPage string
 
+type PullRef struct {
+	Author string
+	Number int
+	Link   string
+	Title  string
+}
+
+type ProwJob struct {
+	Name    string
+	State   string
+	URL     string
+	PullRef *PullRef
+}
+type ClusterClaim struct {
+	Namespace  string
+	Job        *ProwJob
+	Deployment *ClusterDeployment
+}
+
 type ClusterDeployment struct {
-	Name           string
-	InfraID        string
-	Status         string
-	PowerState     string
-	ProwJob        string
-	ProwJobName    string
-	ProwPullAuthor string
-	ProwPullNumber int
-	ProwPullLink   string
-	ProwPullTitle  string
-	ProwState      string
-	ProwURL        string
+	InfraID             string
+	PowerState          string
+	ReadyReason         string
+	ReadyReasonDuration string
+	Claim               *ClusterClaim
 }
 
 type ClusterPool struct {
-	Name        string
-	Size        int32
-	MaxSize     *int32
-	Unclaimed   int32
-	Ready       int32
-	Deployments []ClusterDeployment
+	Name          string
+	Size          int32
+	Standby       int32
+	Ready         int32
+	Deployments   []*ClusterDeployment
+	PendingClaims []*ClusterClaim
 }
 
 type StatusPage struct {
-	Pools      []ClusterPool
+	Pools      []*ClusterPool
 	UpdateTime string
 }
 
+type Options struct {
+	OutputS3Bucket string
+	OutputFilePath string
+	OneShot        bool
+}
+
 func main() {
+	var opts Options
+	flag.StringVar(&opts.OutputS3Bucket, "output-s3-bucket", "cluster-pool-monitor.hypershift.devcluster.openshift.com", "output to s3 bucket")
+	flag.StringVar(&opts.OutputFilePath, "output-file-path", "", "output to file")
+	flag.BoolVar(&opts.OneShot, "one-shot", false, "only update the data once, then exit")
+	flag.Parse()
+
+	var writer Writer
+	if opts.OutputFilePath != "" {
+		writer = NewFileWriter(opts.OutputFilePath)
+	} else {
+		writer = NewS3Writer(opts.OutputS3Bucket)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT)
@@ -93,17 +125,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	err = gatherData(ctx, client)
+	err = updateData(ctx, client, writer)
 	if err != nil {
 		log.Printf("error updating data: %v", err)
 	} else {
 		log.Print("data updated")
 	}
+	if opts.OneShot {
+		os.Exit(0)
+	}
 
 	for {
 		select {
 		case <-time.After(time.Minute):
-			err := gatherData(ctx, client)
+			err = updateData(ctx, client, writer)
 			if err != nil {
 				log.Printf("error updating data: %v", err)
 			} else {
@@ -115,26 +150,79 @@ func main() {
 	}
 }
 
-func gatherData(ctx context.Context, client crclient.Client) error {
+func updateData(ctx context.Context, client crclient.Client, w Writer) error {
+	data, err := gatherData(ctx, client)
+	if err != nil {
+		return fmt.Errorf("error gathering data: %v", err)
+	}
+	err = w.Write(data)
+	if err != nil {
+		return fmt.Errorf("error writing data: %v", err)
+	}
+	return nil
+}
+
+func getProwJob(id string) (*ProwJob, error) {
+	resp, err := http.Get(fmt.Sprintf("https://prow.ci.openshift.org/prowjob?prowjob=%s", id))
+	if err != nil {
+		return nil, fmt.Errorf("unable to get prow job: %v", err)
+	}
+	bytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read prow job: %v", err)
+	}
+	var prowJob prowv1.ProwJob
+	YamlSerializer.Decode(bytes, nil, &prowJob)
+
+	var rtnJob ProwJob
+	rtnJob.Name = prowJob.Name
+	rtnJob.State = string(prowJob.Status.State)
+	rtnJob.URL = prowJob.Status.URL
+	if prowJob.Spec.Refs != nil && len(prowJob.Spec.Refs.Pulls) > 0 {
+		rtnJob.PullRef = &PullRef{
+			Author: prowJob.Spec.Refs.Pulls[0].Author,
+			Number: prowJob.Spec.Refs.Pulls[0].Number,
+			Link:   prowJob.Spec.Refs.Pulls[0].Link,
+			Title:  prowJob.Spec.Refs.Pulls[0].Title,
+		}
+	}
+	return &rtnJob, nil
+}
+
+func gatherData(ctx context.Context, client crclient.Client) ([]byte, error) {
 	log.Print("updating data")
 
 	clusterPoolList := &hivev1.ClusterPoolList{}
 	err := client.List(ctx, clusterPoolList, crclient.InNamespace("hypershift-cluster-pool"))
 	if err != nil {
-		return fmt.Errorf("unable to list cluster pools: %v", err)
+		return nil, fmt.Errorf("unable to list cluster pools: %v", err)
 	}
 	clusterClaimList := &hivev1.ClusterClaimList{}
 	err = client.List(ctx, clusterClaimList, crclient.InNamespace("hypershift-cluster-pool"))
 	if err != nil {
-		return fmt.Errorf("unable to list cluster claims: %v", err)
+		return nil, fmt.Errorf("unable to list cluster claims: %v", err)
 	}
-	var clusterPools []ClusterPool
+
+	claims := make(map[string][]*ClusterClaim)
+	for _, clusterClaim := range clusterClaimList.Items {
+		prowJob, err := getProwJob(clusterClaim.Name)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get prow job: %v", err)
+		}
+		claims[clusterClaim.Spec.ClusterPoolName] = append(claims[clusterClaim.Spec.ClusterPoolName], &ClusterClaim{
+			Namespace: clusterClaim.Spec.Namespace,
+			Job:       prowJob,
+		})
+	}
+
+	var clusterPools []*ClusterPool
 	for _, clusterpool := range clusterPoolList.Items {
-		var deployments []ClusterDeployment
+		var deployments []*ClusterDeployment
+		var pendingClaims []*ClusterClaim
 		namespaceList := &corev1.NamespaceList{}
 		err = client.List(ctx, namespaceList)
 		if err != nil {
-			return fmt.Errorf("unable to list namespaces: %v", err)
+			return nil, fmt.Errorf("unable to list namespaces: %v", err)
 		}
 		for _, ns := range namespaceList.Items {
 			if !strings.HasPrefix(ns.Name, clusterpool.Name) {
@@ -143,63 +231,50 @@ func gatherData(ctx context.Context, client crclient.Client) error {
 			clusterDeploymentList := &hivev1.ClusterDeploymentList{}
 			err = client.List(ctx, clusterDeploymentList, crclient.InNamespace(ns.Name))
 			if err != nil {
-				return fmt.Errorf("unable to list cluster deployments: %v", err)
+				return nil, fmt.Errorf("unable to list cluster deployments: %v", err)
 			}
 			clusterDeployment := clusterDeploymentList.Items[0]
-			var status string
+
+			deployment := &ClusterDeployment{
+				PowerState: string(clusterDeployment.Status.PowerState),
+			}
 			for _, condition := range clusterDeployment.Status.Conditions {
-				if condition.Type == hivev1.ProvisionedCondition {
-					status = condition.Reason
+				if condition.Type == hivev1.ClusterReadyCondition {
+					deployment.ReadyReason = condition.Reason
+					minutes := int(time.Since(condition.LastTransitionTime.Time).Minutes())
+					hours := minutes / 60
+					minutes = minutes % 60
+					deployment.ReadyReasonDuration = fmt.Sprintf("%dh%dm", hours, minutes)
 					break
 				}
-			}
-			var prowJobID string
-			for _, claim := range clusterClaimList.Items {
-				if claim.Spec.Namespace == clusterDeployment.Namespace {
-					prowJobID = claim.Name
-				}
-			}
-
-			deployment := ClusterDeployment{
-				Name:       clusterDeployment.Name,
-				InfraID:    clusterDeployment.Spec.ClusterMetadata.InfraID,
-				Status:     status,
-				PowerState: clusterDeployment.Status.PowerState,
-				ProwJob:    prowJobID,
 			}
 			if clusterDeployment.Spec.ClusterMetadata != nil {
 				deployment.InfraID = clusterDeployment.Spec.ClusterMetadata.InfraID
 			}
-			if prowJobID != "" {
-				var prowJob prowv1.ProwJob
-				resp, err := http.Get(fmt.Sprintf("https://prow.ci.openshift.org/prowjob?prowjob=%s", prowJobID))
-				if err != nil {
-					return fmt.Errorf("unable to get prow job: %v", err)
+			for _, claim := range claims[clusterpool.Name] {
+				if claim.Namespace == clusterDeployment.Namespace {
+					deployment.Claim = claim
+					claim.Deployment = deployment
+					break
 				}
-				bytes, err := io.ReadAll(resp.Body)
-				if err != nil {
-					return fmt.Errorf("unable to read prow job: %v", err)
-				}
-				YamlSerializer.Decode(bytes, nil, &prowJob)
-				deployment.ProwJobName = prowJob.Spec.Job
-				if prowJob.Spec.Refs != nil && len(prowJob.Spec.Refs.Pulls) > 0 {
-					deployment.ProwPullAuthor = prowJob.Spec.Refs.Pulls[0].Author
-					deployment.ProwPullNumber = prowJob.Spec.Refs.Pulls[0].Number
-					deployment.ProwPullLink = prowJob.Spec.Refs.Pulls[0].Link
-					deployment.ProwPullTitle = prowJob.Spec.Refs.Pulls[0].Title
-				}
-				deployment.ProwState = string(prowJob.Status.State)
-				deployment.ProwURL = prowJob.Status.URL
 			}
+
 			deployments = append(deployments, deployment)
 		}
-		clusterPools = append(clusterPools, ClusterPool{
-			Name:        clusterpool.Name,
-			Size:        clusterpool.Spec.Size,
-			MaxSize:     clusterpool.Spec.MaxSize,
-			Ready:       clusterpool.Status.Ready,
-			Unclaimed:   clusterpool.Status.Size,
-			Deployments: deployments,
+
+		for _, claim := range claims[clusterpool.Name] {
+			if claim.Deployment == nil {
+				pendingClaims = append(pendingClaims, claim)
+			}
+		}
+
+		clusterPools = append(clusterPools, &ClusterPool{
+			Name:          clusterpool.Name,
+			Size:          clusterpool.Spec.Size,
+			Ready:         clusterpool.Status.Ready,
+			Standby:       clusterpool.Status.Standby,
+			Deployments:   deployments,
+			PendingClaims: pendingClaims,
 		})
 	}
 
@@ -212,23 +287,65 @@ func gatherData(ctx context.Context, client crclient.Client) error {
 	page := template.Must(template.New("page").Parse(htmlPage))
 	err = page.Execute(&output, statusPage)
 	if err != nil {
-		return fmt.Errorf("unable to execute template: %v", err)
+		return nil, fmt.Errorf("unable to execute template: %v", err)
 	}
 
+	return output.Bytes(), nil
+}
+
+type Writer interface {
+	Write([]byte) error
+}
+
+type S3Writer struct {
+	client     *s3.S3
+	bucketName string
+}
+
+func NewS3Writer(bucketName string) Writer {
 	awsConfig := aws.NewConfig()
 	awsConfig.Region = aws.String("us-east-1")
 	awsSession := session.Must(session.NewSession())
 	s3Client := s3.New(awsSession, awsConfig)
-	_, err = s3Client.PutObject(&s3.PutObjectInput{
+	return &S3Writer{
+		client:     s3Client,
+		bucketName: bucketName,
+	}
+}
+
+func (w *S3Writer) Write(data []byte) error {
+	_, err := w.client.PutObject(&s3.PutObjectInput{
 		ACL:          aws.String("public-read"),
-		Body:         bytes.NewReader(output.Bytes()),
+		Body:         bytes.NewReader(data),
 		Bucket:       aws.String("cluster-pool-monitor.hypershift.devcluster.openshift.com"),
 		Key:          aws.String("index.html"),
 		ContentType:  aws.String("text/html"),
 		CacheControl: aws.String("max-age=50"),
 	})
 	if err != nil {
-		return fmt.Errorf("unable to upload to s3: %v", err)
+		return fmt.Errorf("unable to write to s3: %v", err)
+	}
+	return nil
+}
+
+type FileWriter struct {
+	FilePath string
+}
+
+func NewFileWriter(filePath string) Writer {
+	return &FileWriter{
+		FilePath: filePath,
+	}
+}
+
+func (w *FileWriter) Write(data []byte) error {
+	file, err := os.Create(w.FilePath)
+	if err != nil {
+		return fmt.Errorf("unable to create file: %v", err)
+	}
+	defer file.Close()
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("unable to write file: %v", err)
 	}
 	return nil
 }
